@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "web-search-mcp-server": {
+      "type": "streamableHttp",
+      "description": "根据用户提问，搜索实时网页信息",
+      "url": "https://qianfan.baidubce.com/v2/tools/web-search/mcp",
+      "headers": {
+        "Authorization": "Bearer bce-v3/ALTAK-SV5tJybZbH7jOph9o7ERi/7688aa3c7c982aaf93849dcfcf3bed713c50e0c0"
+      }
+    }
+  }
+}
