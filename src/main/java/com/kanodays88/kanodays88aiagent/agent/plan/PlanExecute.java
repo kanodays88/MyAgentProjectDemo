@@ -6,8 +6,11 @@ import com.kanodays88.kanodays88aiagent.Kanodays88AiAgentApplication;
 import com.kanodays88.kanodays88aiagent.advisor.MyLoggerAdvisor;
 import com.kanodays88.kanodays88aiagent.agent.Kanodays88Manus;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AbstractMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -100,16 +104,34 @@ public class PlanExecute {
         List<DistilledResult> results = new ArrayList<>();
         Kanodays88Manus kanodays88Manus = new Kanodays88Manus(allTools, dashscopeChatModel);
         for(SubTask task:subTasks){
-            //先为智能体输入上游任务的记忆
-//            kanodays88Manus.setMessageList(results.stream().map(r->new UserMessage(r)).collect(Collectors.toList()));
-            //执行任务，得到本次任务的结果
-            List<String> childResult = kanodays88Manus.run(task.taskContent());
-//            results.addAll(childResult);
+            //获取该任务对应所需的上游任务的结果
+            String upStreamTaskResult = checkAndFillUpstreamContext(task, results);
+            //将上游的结果作为记忆输入给智能体
+            kanodays88Manus.setMessageList(List.of(upStreamTaskResult).stream().map(s->new UserMessage(s)).collect(Collectors.toList()));
+            //将任务转化为提示词
+            String promptTask = """
+                    请根据下列任务信息完成任务
+                    【任务名称】：{taskName}
+                    【任务内容】：{taskContant}
+                    【完成任务的json输出格式】：{format}
+                    【输出格式中必须要有的字段】：{requiredFields}
+                    """;
+            PromptTemplate promptTemplate = new PromptTemplate(promptTask);
+            Prompt prompt = promptTemplate.create(Map.of("tastName", task.taskName(), "taskContant", task.taskContent(), "format", task.outputSchema(), "requiredFields", task.requiredFields()));
+
+            //执行任务，得到本次任务的原始结果
+            List<String> childResult = kanodays88Manus.run(prompt.getContents());
+            //原始结果拼接
+            String result = childResult.stream().collect(Collectors.joining("/n"));
+            //蒸馏任务结果
+            DistilledResult distilledResult = distillSubTaskResult(task, result, decomposedTasks.globalRequiredFields());
+
+            results.add(distilledResult);
         }
 
         //整合结果集和意图，得到最终结果
-//        String s = fuseResults(taskSchema, results);
-        return "";
+        String s = fuseResults(taskSchema, results);
+        return s;
     }
 
     //意图解析
@@ -182,23 +204,59 @@ public class PlanExecute {
             Set<String> requiredFields = upstreamTask.requiredFields();
             String coreResult = upstreamResult.structuredCoreResult();
 
-            // 校验必填字段是否存在，缺失则从归档的原始结果里重新提取
-            for (String field : requiredFields) {
-                if (!coreResult.contains(field)) {
-                    System.out.println("  ⚠️ 上游任务" + upstreamTask.taskId() + "缺失字段[" + field + "]，触发自动召回");
-//                    String reExtracted = reExtractFieldFromRawResult(upstreamTask.taskId(), field);
-//                    coreResult = coreResult + "\n" + field + "：" + reExtracted;
-                }
-            }
+//            // 校验必填字段是否存在，缺失则从归档的原始结果里重新提取
+//            for (String field : requiredFields) {
+//                if (!coreResult.contains(field)) {
+//                    System.out.println("  ⚠️ 上游任务" + upstreamTask.taskId() + "缺失字段[" + field + "]，触发自动召回");
+////                    String reExtracted = reExtractFieldFromRawResult(upstreamTask.taskId(), field);
+////                    coreResult = coreResult + "\n" + field + "：" + reExtracted;
+//                }
+//            }
 
             // 把校验后的上游核心结果加入上下文
-            context.append("【上游任务").append(upstreamTask.taskId()).append("核心结果】\n").append(coreResult).append("\n\n");
+            context.append("上游任务:").append(upstreamTask.taskContent()).append("\n核心结果:").append(coreResult).append("\n---\n");
         }
         return context.toString();
     }
 
+    /**
+     * 任务蒸馏
+     * @param subTask 原任务
+     * @param rawResult 原任务返回结果
+     * @param globalRequiredFields 全局任务必须要求的字段
+     * @return
+     */
+    private DistilledResult distillSubTaskResult(SubTask subTask, String rawResult, Set<String> globalRequiredFields) {
+        String prompt = """
+            对以下子任务的原始结果做定向蒸馏，严格遵守以下规则，违规直接输出无效：
+            1. 必须严格按照子任务的outputSchema输出纯JSON
+            2. 必须完整留存下游任务需要的所有字段：{requiredFields}
+            3. 全局强制留存字段，绝对不能删除：{globalRequiredFields}
+            4. 仅可删除冗余推理过程、无关描述、重复话术，不得修改任何核心数据；
+            5. 输出必须是纯JSON，不能有任何额外的解释、markdown格式、代码块标记。
+
+            子任务名称：{taskName}
+            输出Schema：{outputSchema}
+            子任务原始结果：{rawResult}
+            """;
+
+        // 结构化蒸馏，强制符合Schema，保证必填字段不丢
+        String structuredCoreResult = chatClient.prompt()
+                .user(u -> u.text(prompt)
+                        .param("taskName", subTask.taskName())
+                        .param("requiredFields", subTask.requiredFields())
+                        .param("globalRequiredFields", globalRequiredFields)
+                        .param("outputSchema", subTask.outputSchema())
+                        .param("rawResult", rawResult))
+                .call()
+                .content();
+
+        return new DistilledResult(subTask.taskId(), structuredCoreResult, rawResult, subTask);
+    }
+
     //整合结果集和意图，得到最终结果
-    private String fuseResults(TaskSchema task, List<String> subTaskResults) {
+    private String fuseResults(TaskSchema task, List<DistilledResult> subTaskResults) {
+        List<String> results = subTaskResults.stream().map(s -> s.structuredCoreResult()).collect(Collectors.toList());
         String prompt = """
             请基于以下子任务结果，整合生成符合用户原始需求的最终交付物。
             原始核心目标: {mainGoal}
@@ -211,7 +269,7 @@ public class PlanExecute {
                 .user(u -> u.text(prompt)
                         .param("mainGoal", task.mainGoal())
                         .param("deliverables", task.deliverables())
-                        .param("subTaskResults", String.join("\n---\n", subTaskResults)))
+                        .param("subTaskResults", String.join("\n---\n", results)))
                 .call()
                 .content();
     }
