@@ -110,19 +110,19 @@ public class PlanExecute {
             kanodays88Manus.setMessageList(List.of(upStreamTaskResult).stream().map(s->new UserMessage(s)).collect(Collectors.toList()));
             //将任务转化为提示词
             String promptTask = """
-                    请根据下列任务信息完成任务
+                    请根据下列任务信息和工具调用结果精炼总结输出
                     【任务名称】：{taskName}
                     【任务内容】：{taskContant}
                     【完成任务的json输出格式】：{format}
                     【输出格式中必须要有的字段】：{requiredFields}
                     """;
             PromptTemplate promptTemplate = new PromptTemplate(promptTask);
-            Prompt prompt = promptTemplate.create(Map.of("tastName", task.taskName(), "taskContant", task.taskContent(), "format", task.outputSchema(), "requiredFields", task.requiredFields()));
+            Prompt prompt = promptTemplate.create(Map.of("taskName", task.taskName(), "taskContant", task.taskContent(), "format", task.outputSchema(), "requiredFields", task.requiredFields()));
 
             //执行任务，得到本次任务的原始结果
-            List<String> childResult = kanodays88Manus.run(prompt.getContents());
+            List<String> childResult = kanodays88Manus.run(task.taskContent());
             //原始结果拼接
-            String result = childResult.stream().collect(Collectors.joining("/n"));
+            String result = childResult.stream().collect(Collectors.joining("/n---/n"));
             //蒸馏任务结果
             DistilledResult distilledResult = distillSubTaskResult(task, result, decomposedTasks.globalRequiredFields());
 

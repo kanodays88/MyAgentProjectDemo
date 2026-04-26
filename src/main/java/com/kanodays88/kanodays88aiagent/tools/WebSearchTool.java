@@ -2,6 +2,8 @@ package com.kanodays88.kanodays88aiagent.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.springframework.ai.tool.annotation.Tool;
@@ -56,13 +58,24 @@ public class WebSearchTool {
     private String extractReferencesArray(String jsonResponse) throws IOException {
         JsonNode rootNode = OBJECT_MAPPER.readTree(jsonResponse);
 
-        // 检查是否存在references数组
         if (rootNode.has("references") && rootNode.get("references").isArray()) {
             JsonNode referencesArray = rootNode.get("references");
-            // 直接返回references数组的JSON字符串，保持原始结构
-            return OBJECT_MAPPER.writeValueAsString(referencesArray);
-        }
+            ArrayNode filteredArray = OBJECT_MAPPER.createArrayNode();
 
+            // 遍历并过滤每个引用元素
+            for (JsonNode ref : referencesArray) {
+                if (ref.isObject()) {
+                    ObjectNode filteredRef = OBJECT_MAPPER.createObjectNode();
+                    // 仅保留指定字段
+                    filteredRef.set("content", ref.get("content"));
+                    filteredRef.set("image", ref.get("image"));
+                    filteredRef.set("video", ref.get("video"));
+                    filteredRef.set("date", ref.get("date"));
+                    filteredArray.add(filteredRef);
+                }
+            }
+            return OBJECT_MAPPER.writeValueAsString(filteredArray);
+        }
         throw new IOException("响应中缺少references数组");
     }
 }

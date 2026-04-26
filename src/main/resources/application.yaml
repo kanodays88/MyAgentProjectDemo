@@ -38,6 +38,8 @@ spring:
       chat:
         options:
           model: glm-5.1
+      connect-timeout: 60000
+      read-timeout: 120000
       embedding:
         options:
           model: text-embedding-v3
