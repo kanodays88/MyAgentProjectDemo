@@ -3,6 +3,7 @@ package com.kanodays88.kanodays88aiagent.agent;
 import cn.hutool.core.collection.CollUtil;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.kanodays88.kanodays88aiagent.agent.model.AgentState;
+import com.kanodays88.kanodays88aiagent.agent.sse.SSESend;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -15,6 +16,7 @@ import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
@@ -45,7 +47,7 @@ public class ToolCallAgent extends ReActAgent{
     }
 
     @Override
-    public boolean think(String userPrompt,String taskName) {
+    public boolean think(String userPrompt, String taskName, SseEmitter sseEmitter, SSESend sseSend) {
         //如果“下一步提示词”不为空且不为空串
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
             //将“下一步提示词”构建成用户提示词
@@ -84,6 +86,10 @@ public class ToolCallAgent extends ReActAgent{
             this.toolCallChatResponse = chatResponse;
             //获取大模型返回的消息
             AssistantMessage assistantMessage = chatResponse.getResult().getOutput();
+            //通过SseEmitter将大模型思考过程发送给用户
+            sseSend.sendEvent(sseEmitter,(String) assistantMessage.getMetadata().get("reasoningContent")+"\n");
+            //通过SseEmitter将大模型思考结果发送给用户
+            sseSend.sendEvent(sseEmitter,assistantMessage.getText()+"\n");
 
             //大模型思考结果的输出文本
             String result = assistantMessage.getText();

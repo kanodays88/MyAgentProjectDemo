@@ -4,10 +4,12 @@ package com.kanodays88.kanodays88aiagent.agent;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.itextpdf.styledxmlparser.jsoup.internal.StringUtil;
 import com.kanodays88.kanodays88aiagent.agent.model.AgentState;
+import com.kanodays88.kanodays88aiagent.agent.sse.SSESend;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,7 +40,7 @@ public abstract class BaseAgent {
     private List<Message> messageList = new ArrayList<>();
 
 
-    public List<String> run(String userPrompt,String taskName) {
+    public List<String> run(String userPrompt, String taskName, SseEmitter emitter, SSESend sseSend) {
         //智能体不空闲
         if (this.state != AgentState.IDLE) {
             throw new RuntimeException("Cannot run agent from state: " + this.state);
@@ -61,7 +63,7 @@ public abstract class BaseAgent {
                 currentStep = stepNumber;
                 log.info("Executing step " + stepNumber + "/" + maxSteps);
                 //执行智能体思考
-                String stepResult = step(userPrompt,taskName);
+                String stepResult = step(userPrompt,taskName,emitter,sseSend);
                 String result = "Step " + stepNumber + ": " + stepResult;
                 //卡死检测（预防无效步数浪费）
                 if(isStuck()){
@@ -122,5 +124,5 @@ public abstract class BaseAgent {
         this.messageList.clear();
     }
 
-    public abstract String step(String userPrompt,String taskName);
+    public abstract String step(String userPrompt,String taskName,SseEmitter sseEmitter,SSESend sseSend);
 }

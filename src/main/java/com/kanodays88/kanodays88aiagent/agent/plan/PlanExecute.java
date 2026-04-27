@@ -1,12 +1,16 @@
 package com.kanodays88.kanodays88aiagent.agent.plan;
 
 
-import com.google.protobuf.Message;
 import com.kanodays88.kanodays88aiagent.Kanodays88AiAgentApplication;
 import com.kanodays88.kanodays88aiagent.advisor.MyLoggerAdvisor;
 import com.kanodays88.kanodays88aiagent.agent.Kanodays88Manus;
+import com.kanodays88.kanodays88aiagent.agent.sse.SSESend;
+import com.kanodays88.kanodays88aiagent.constant.FileConstant;
+import com.kanodays88.kanodays88aiagent.memory.FileBasedChatMemory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AbstractMessage;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -16,11 +20,13 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 // 1. 任务结构化模型（对应 OpenManus 的意图解析输出）
@@ -80,6 +86,11 @@ public class PlanExecute {
 
     private ChatClient chatClient;
 
+    private FileBasedChatMemory fileBasedChatMemory;
+
+    @Autowired
+    private SSESend sseSend;
+
     @Autowired
     private ToolCallback[] allTools;
 
@@ -90,53 +101,84 @@ public class PlanExecute {
         this.chatClient = ChatClient.builder(dashscopeChatModel).defaultAdvisors(
                 new MyLoggerAdvisor()
         ).build();
+        this.fileBasedChatMemory = new FileBasedChatMemory(FileConstant.FILE_SAVE_DIR + "chatMemory");
     }
     //计划执行，整个智能体执行的入口
-    public String planExecute(String userPrompt){
-        //意图分析
-        TaskSchema taskSchema = parseIntent(userPrompt);
+    public SseEmitter planExecute(String userPrompt,String conversationId){
+        // 1. 创建SSE发射器，设置10分钟超时（根据任务复杂度调整）
+        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        //异步执行智能体
+        CompletableFuture.runAsync(()->{
+            //获取当前会话最近10条消息记录
+            List<Message> messages = fileBasedChatMemory.get(conversationId, 10);
+            fileBasedChatMemory.add(conversationId,List.of(new UserMessage(userPrompt)));//将用户输入存记忆
+            //意图分析
+            sseSend.sendEvent(emitter,"开始进行意图分析...");
+            TaskSchema taskSchema = parseIntent(userPrompt,messages);
+            String taskSchemaMessage = "意图解析完成";
+            if(!taskSchema.mainGoal().equals("") && !taskSchema.mainGoal().isEmpty()) taskSchemaMessage += "核心目标: "+taskSchema.mainGoal()+"\n";
+            if(!taskSchema.deliverables().equals("") && !taskSchema.deliverables().isEmpty()) taskSchemaMessage += "交付要求: "+taskSchema.deliverables()+"\n";
+            if(!taskSchema.constraints().equals("") && !taskSchema.constraints().isEmpty()) taskSchemaMessage += "约束条件: "+taskSchema.constraints()+"\n";
+            sseSend.sendEvent(emitter,taskSchemaMessage);
 
-        //对意图进行任务拆分
-        DecomposedTasks decomposedTasks = decomposeTaskWithContract(taskSchema);
-        List<SubTask> subTasks = decomposedTasks.subTaskList();
+            //对意图进行任务拆分
+            sseSend.sendEvent(emitter,"开始对任务进行拆分...");
+            DecomposedTasks decomposedTasks = decomposeTaskWithContract(taskSchema);
+            List<SubTask> subTasks = decomposedTasks.subTaskList();
+            String taskMessage = subTasks.stream().map(s -> {
+                return "任务" + s.taskId() + "：" + s.taskName();
+            }).collect(Collectors.joining("\n---\n"));
+            sseSend.sendEvent(emitter,"任务拆分完成：\n"+taskMessage);
 
-        //对每个子任务执行，得到结果集
-        List<DistilledResult> results = new ArrayList<>();
-        Kanodays88Manus kanodays88Manus = new Kanodays88Manus(allTools, dashscopeChatModel);
-        for(SubTask task:subTasks){
-            //获取该任务对应所需的上游任务的结果
-            String upStreamTaskResult = checkAndFillUpstreamContext(task, results);
-            //将上游的结果作为记忆输入给智能体
-            kanodays88Manus.setMessageList(List.of(upStreamTaskResult).stream().map(s->new UserMessage(s)).collect(Collectors.toList()));
+            //对每个子任务执行，得到结果集
+            List<DistilledResult> results = new ArrayList<>();
+            Kanodays88Manus kanodays88Manus = new Kanodays88Manus(allTools, dashscopeChatModel);
+            for(SubTask task:subTasks){
+                sseSend.sendEvent(emitter,"开始执行任务【"+task.taskName()+"】\n\n");
+                //获取该任务对应所需的上游任务的结果
+                String upStreamTaskResult = checkAndFillUpstreamContext(task, results);
+                //将上游的结果作为记忆输入给智能体
+                kanodays88Manus.setMessageList(List.of(upStreamTaskResult).stream().map(s->new UserMessage(s)).collect(Collectors.toList()));
 
-            //执行任务，得到本次任务的原始结果
-            List<String> childResult = kanodays88Manus.run(task.taskContent(),task.taskName());
-            //原始结果拼接
-            String result = childResult.stream().collect(Collectors.joining("/n---/n"));
-            //蒸馏任务结果
-            DistilledResult distilledResult = distillSubTaskResult(task, result, decomposedTasks.globalRequiredFields());
+                //执行任务，得到本次任务的原始结果
+                List<String> childResult = kanodays88Manus.run(task.taskContent(),task.taskName(),emitter,sseSend);
+                //原始结果拼接
+                String result = childResult.stream().collect(Collectors.joining("/n---/n"));
+                //蒸馏任务结果
+                DistilledResult distilledResult = distillSubTaskResult(task, result, decomposedTasks.globalRequiredFields());
 
-            results.add(distilledResult);
-        }
+                results.add(distilledResult);
+            }
 
-        //整合结果集和意图，得到最终结果
-        String s = fuseResults(taskSchema, results);
-        return s;
+            //整合结果集和意图，得到最终结果
+            String s = fuseResults(taskSchema, results);
+            fileBasedChatMemory.add(conversationId,List.of(new AssistantMessage(s)));//将模型返回的最终结果存入记忆
+            sseSend.sendEvent(emitter,s);
+            //关闭链接
+            emitter.complete();
+        });
+        return emitter;
     }
 
     //意图解析
-    public TaskSchema parseIntent(String userPrompt){
+    public TaskSchema parseIntent(String userPrompt,List<Message> messages){
+        String historyMessage = messages.stream().map(m -> {
+            return m.getMessageType() + ": " + m.getText();
+        }).collect(Collectors.joining("\n"));
         //结构化输出转换器，能将大模型输出转换成对应类型
         BeanOutputConverter<TaskSchema> converter = new BeanOutputConverter<>(TaskSchema.class);
         String prompt = """
                     请分析用户的需求，提取核心目标、约束条件、交付要求，以 JSON 格式返回。
-                    用户输入: {userInput}
-                    输出格式要求: {format}
+                    历史会话记录仅供参考，以用户输入需求为主，历史会话为辅
+                    【用户输入】: {userInput}
+                    【输出格式要求】: {format}
+                    【历史会话】: {history}
                 """;
         TaskSchema taskSchema = chatClient.prompt().user(
                         u -> u.text(prompt).
                                 param("userInput", userPrompt).
-                                param("format", converter.getFormat()))
+                                param("format", converter.getFormat())
+                                .param("history",historyMessage))
                 .system("你是意图解析器，根据用户的要求解析意图")
                 .call()
                 .entity(converter);
