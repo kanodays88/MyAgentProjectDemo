@@ -7,14 +7,14 @@ import lombok.EqualsAndHashCode;
 public abstract class ReActAgent extends BaseAgent{
 
     //让智能体思考问题是否解决
-    public abstract boolean think(String userPrompt);
+    public abstract boolean think(String userPrompt,String taskName);
     //让智能体动手解决
     public abstract String act();
 
     @Override
-    public String step(String userPrompt) {
+    public String step(String userPrompt,String taskName) {
         try{
-            boolean think = think(userPrompt);
+            boolean think = think(userPrompt,taskName);
             if(!think){
                 return "思考完成-无需行动";
             }

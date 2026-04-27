@@ -45,7 +45,7 @@ public class ToolCallAgent extends ReActAgent{
     }
 
     @Override
-    public boolean think(String userPrompt) {
+    public boolean think(String userPrompt,String taskName) {
         //如果“下一步提示词”不为空且不为空串
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
             //将“下一步提示词”构建成用户提示词
@@ -58,19 +58,20 @@ public class ToolCallAgent extends ReActAgent{
         List<Message> messageList = getMessageList();
         Prompt prompt = new Prompt(messageList, chatOptions);
         try {
-            //更新设置系统提示词TODO
+            //更新设置系统提示词
             String SYSTEM_PROMPT = """
                     角色：Kanodays88Manus全能AI助手
                     ##核心规则：
-                    1.只实现核心任务，其他任务有其他智能体完成
+                    1.根据核心任务内容实现核心任务，不需要关注其他任务的实现情况
                     2.当你认为任务完成或无法继续时，调用AssignmentFinishTool工具结束交互
                     ##输入变量：
                     {question}：核心任务
+                    {taskContent}：核心任务内容
                     {now}：当前剩余思考次数
                     {max}：最大可用思考次数
                 """;
             PromptTemplate promptTemplate = new PromptTemplate(SYSTEM_PROMPT);
-            Prompt systemPrompt = promptTemplate.create(Map.of("now", this.getMaxSteps()-this.getCurrentStep(), "max", this.getMaxSteps(),"question",userPrompt));
+            Prompt systemPrompt = promptTemplate.create(Map.of("now", this.getMaxSteps()-this.getCurrentStep(), "max", this.getMaxSteps(),"question",taskName,"taskContent",userPrompt));
 
             log.info(systemPrompt.getContents());
             //调用大模型，并获取返回结果

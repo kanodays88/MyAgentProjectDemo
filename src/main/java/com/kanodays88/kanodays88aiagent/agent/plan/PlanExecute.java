@@ -120,7 +120,7 @@ public class PlanExecute {
             Prompt prompt = promptTemplate.create(Map.of("taskName", task.taskName(), "taskContant", task.taskContent(), "format", task.outputSchema(), "requiredFields", task.requiredFields()));
 
             //执行任务，得到本次任务的原始结果
-            List<String> childResult = kanodays88Manus.run(task.taskContent());
+            List<String> childResult = kanodays88Manus.run(task.taskContent(),task.taskName());
             //原始结果拼接
             String result = childResult.stream().collect(Collectors.joining("/n---/n"));
             //蒸馏任务结果
