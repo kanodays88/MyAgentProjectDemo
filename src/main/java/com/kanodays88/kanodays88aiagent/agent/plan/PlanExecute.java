@@ -108,16 +108,6 @@ public class PlanExecute {
             String upStreamTaskResult = checkAndFillUpstreamContext(task, results);
             //将上游的结果作为记忆输入给智能体
             kanodays88Manus.setMessageList(List.of(upStreamTaskResult).stream().map(s->new UserMessage(s)).collect(Collectors.toList()));
-            //将任务转化为提示词
-            String promptTask = """
-                    请根据下列任务信息和工具调用结果精炼总结输出
-                    【任务名称】：{taskName}
-                    【任务内容】：{taskContant}
-                    【完成任务的json输出格式】：{format}
-                    【输出格式中必须要有的字段】：{requiredFields}
-                    """;
-            PromptTemplate promptTemplate = new PromptTemplate(promptTask);
-            Prompt prompt = promptTemplate.create(Map.of("taskName", task.taskName(), "taskContant", task.taskContent(), "format", task.outputSchema(), "requiredFields", task.requiredFields()));
 
             //执行任务，得到本次任务的原始结果
             List<String> childResult = kanodays88Manus.run(task.taskContent(),task.taskName());
@@ -203,15 +193,6 @@ public class PlanExecute {
             SubTask upstreamTask = upstreamResult.subTask();//获取上游任务
             Set<String> requiredFields = upstreamTask.requiredFields();
             String coreResult = upstreamResult.structuredCoreResult();
-
-//            // 校验必填字段是否存在，缺失则从归档的原始结果里重新提取
-//            for (String field : requiredFields) {
-//                if (!coreResult.contains(field)) {
-//                    System.out.println("  ⚠️ 上游任务" + upstreamTask.taskId() + "缺失字段[" + field + "]，触发自动召回");
-////                    String reExtracted = reExtractFieldFromRawResult(upstreamTask.taskId(), field);
-////                    coreResult = coreResult + "\n" + field + "：" + reExtracted;
-//                }
-//            }
 
             // 把校验后的上游核心结果加入上下文
             context.append("上游任务:").append(upstreamTask.taskContent()).append("\n核心结果:").append(coreResult).append("\n---\n");
